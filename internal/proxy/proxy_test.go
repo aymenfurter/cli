@@ -3,6 +3,7 @@ package proxy
 import (
 	"errors"
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
@@ -114,12 +115,7 @@ func TestProxyForURL(t *testing.T) {
 			r := newTestResolver(tt.env, func(*url.URL) ([]string, error) {
 				return tt.system, tt.err
 			}, func(hostport string) bool {
-				for _, d := range tt.down {
-					if d == hostport {
-						return false
-					}
-				}
-				return true
+				return !slices.Contains(tt.down, hostport)
 			})
 			got, err := r.ProxyForURL(mustURL(t, tt.target))
 			require.NoError(t, err)

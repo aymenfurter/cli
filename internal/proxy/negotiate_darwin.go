@@ -73,7 +73,7 @@ func gssToken(host string) ([]byte, error) {
 	var out unsafe.Pointer
 	var outlen C.size_t
 	var cerr *C.char
-	if C.gh_spnego_token(spn, &out, &outlen, &cerr) != 0 {
+	if C.gh_spnego_token(spn, &out, &outlen, &cerr) != 0 { //nolint:gocritic // false positive from cgo-generated code
 		msg := "GSS-API error"
 		if cerr != nil {
 			msg = C.GoString(cerr)

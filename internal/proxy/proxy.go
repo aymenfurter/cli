@@ -134,7 +134,7 @@ func (r *Resolver) ProxyForURL(u *url.URL) (*url.URL, error) {
 	entries, err := r.System(u)
 	if err != nil {
 		// Do not stop the request: try a direct connection as before.
-		return nil, nil
+		return nil, nil //nolint:nilerr // a failed OS lookup must not fail the request
 	}
 	p := r.choose(ParseEntries(entries))
 
@@ -193,7 +193,7 @@ func ParseEntries(entries []string) []*url.URL {
 	var out []*url.URL
 	seen := map[string]bool{}
 	for _, e := range entries {
-		for _, item := range strings.Split(e, ";") {
+		for item := range strings.SplitSeq(e, ";") {
 			fields := strings.Fields(item)
 			if len(fields) == 0 {
 				continue

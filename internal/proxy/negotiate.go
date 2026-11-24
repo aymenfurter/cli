@@ -67,7 +67,7 @@ func (n *negotiator) ConnectResponse(_ context.Context, proxyURL *url.URL, req *
 
 func offersNegotiate(h http.Header) bool {
 	for _, v := range h.Values("Proxy-Authenticate") {
-		for _, challenge := range strings.Split(v, ",") {
+		for challenge := range strings.SplitSeq(v, ",") {
 			f := strings.Fields(challenge)
 			if len(f) > 0 && strings.EqualFold(f[0], "Negotiate") {
 				return true
