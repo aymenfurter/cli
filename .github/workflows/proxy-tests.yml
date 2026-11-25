@@ -26,9 +26,12 @@ jobs:
         run: |
           $dir = New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\wpad"
           Set-Content -Encoding ascii "$dir\wpad.dat" 'function FindProxyForURL(url, host) { return "PROXY 127.0.0.1:3999"; }'
+          Stop-Service W3SVC,WAS -Force -ErrorAction SilentlyContinue
+          cmd /c "net stop http /y"
           Get-NetTCPConnection -LocalPort 80 -State Listen -ErrorAction SilentlyContinue | Format-Table | Out-String
           Start-Process python -ArgumentList '-m','http.server','80','--bind','127.0.0.1','--directory',"$dir" -WindowStyle Hidden
           Start-Sleep 3
+          (Invoke-WebRequest -UseBasicParsing http://127.0.0.1/wpad.dat).Content
           $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
           if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
           $v = (Get-ItemProperty -Path $key -Name DefaultConnectionSettings -ErrorAction SilentlyContinue).DefaultConnectionSettings
