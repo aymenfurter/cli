@@ -1,0 +1,24 @@
+name: Proxy tests (fork only)
+on:
+  push:
+    branches: [proxy-ci]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  proxy:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - shell: bash
+        run: go test -v -count=1 ./internal/proxy/... 2>&1 | tee proxy.log
+      - shell: bash
+        run: |
+          ! grep -E -- '--- (SKIP|FAIL)' proxy.log
