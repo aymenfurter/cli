@@ -35,6 +35,8 @@ const (
 	winhttpAutoproxyRunInprocess = 0x00010000
 
 	errWinhttpLoginFailure = windows.Errno(12015)
+
+	wpadURL = "http://wpad/wpad.dat"
 )
 
 type winhttpCurrentUserIEProxyConfig struct {
@@ -130,6 +132,14 @@ func autoProxy(u *url.URL, autoDetect bool, pacURL string) ([]string, bool) {
 		if err == nil {
 			opts = append(opts, winhttpAutoproxyOptions{flags: winhttpAutoproxyConfigURL, autoConfigURL: p})
 		}
+	}
+	if autoDetect {
+		// WinHTTP DNS discovery uses only the primary DNS suffix of the
+		// computer, so it does not work on most computers that are not in a
+		// domain. Browsers also try the unqualified "wpad" host, which the
+		// DNS suffix search list completes.
+		p, _ := windows.UTF16PtrFromString(wpadURL)
+		opts = append(opts, winhttpAutoproxyOptions{flags: winhttpAutoproxyConfigURL | winhttpAutoproxyRunInprocess, autoConfigURL: p})
 	}
 	for _, o := range opts {
 		info, err := proxyForURL(session, target, o)
