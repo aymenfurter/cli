@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"errors"
 	"net"
 	"net/url"
 	"regexp"
@@ -29,6 +30,11 @@ const (
 	winhttpAutoproxyConfigURL   = 0x2
 	winhttpAutoDetectTypeDHCP   = 0x1
 	winhttpAutoDetectTypeDNSA   = 0x2
+	// winhttpAutoproxyRunInprocess runs WPAD and the PAC script in this
+	// process instead of in the WinHTTP AutoProxy service.
+	winhttpAutoproxyRunInprocess = 0x00010000
+
+	errWinhttpLoginFailure = windows.Errno(12015)
 )
 
 type winhttpCurrentUserIEProxyConfig struct {
@@ -126,22 +132,42 @@ func autoProxy(u *url.URL, autoDetect bool, pacURL string) ([]string, bool) {
 		}
 	}
 	for _, o := range opts {
-		for _, logon := range []int32{0, 1} {
-			o.autoLogonIfChallenged = logon
-			var info winhttpProxyInfo
-			r, _, _ := procWinHttpGetProxyForUrl.Call(session, uintptr(unsafe.Pointer(target)), uintptr(unsafe.Pointer(&o)), uintptr(unsafe.Pointer(&info)))
-			if r == 0 {
-				continue
-			}
-			p := takeString(info.proxy)
-			_ = takeString(info.proxyBypass)
-			if info.accessType != winhttpAccessTypeNamedProxy || p == "" {
-				return []string{"DIRECT"}, true
-			}
-			return proxyListEntries(p, u.Scheme), true
+		info, err := proxyForURL(session, target, o)
+		if err != nil && o.flags&winhttpAutoproxyAutoDetect != 0 {
+			// The AutoProxy service keeps a failed discovery for some time,
+			// also after the network changes (for example a new "wpad" DNS
+			// entry). A discovery in this process does not use that cache.
+			o.flags |= winhttpAutoproxyRunInprocess
+			info, err = proxyForURL(session, target, o)
 		}
+		if err != nil {
+			continue
+		}
+		p := takeString(info.proxy)
+		_ = takeString(info.proxyBypass)
+		if info.accessType != winhttpAccessTypeNamedProxy || p == "" {
+			return []string{"DIRECT"}, true
+		}
+		return proxyListEntries(p, u.Scheme), true
 	}
 	return nil, false
+}
+
+// proxyForURL calls WinHttpGetProxyForUrl. It tries again with the
+// credentials of the current user only if the PAC server asks for them.
+func proxyForURL(session uintptr, target *uint16, o winhttpAutoproxyOptions) (winhttpProxyInfo, error) {
+	var info winhttpProxyInfo
+	for _, logon := range []int32{0, 1} {
+		o.autoLogonIfChallenged = logon
+		r, _, err := procWinHttpGetProxyForUrl.Call(session, uintptr(unsafe.Pointer(target)), uintptr(unsafe.Pointer(&o)), uintptr(unsafe.Pointer(&info)))
+		if r != 0 {
+			return info, nil
+		}
+		if !errors.Is(err, errWinhttpLoginFailure) {
+			return info, err
+		}
+	}
+	return info, errWinhttpLoginFailure
 }
 
 // proxyListEntries converts a WinHTTP proxy string, for example
