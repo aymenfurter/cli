@@ -17,8 +17,36 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # The same steps as the GitHub Copilot app proxy-e2e "wpad" setup, in
+      # the same order: auto-detect on, ask the AutoProxy service, and only
+      # then add the "wpad" hosts entries.
+      - name: Set up WPAD
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $dir = New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\wpad"
+          Set-Content -Encoding ascii "$dir\wpad.dat" 'function FindProxyForURL(url, host) { return "PROXY 127.0.0.1:3999"; }'
+          Get-NetTCPConnection -LocalPort 80 -State Listen -ErrorAction SilentlyContinue | Format-Table | Out-String
+          Start-Process python -ArgumentList '-m','http.server','80','--bind','127.0.0.1','--directory',"$dir" -WindowStyle Hidden
+          Start-Sleep 3
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
+          if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+          $v = (Get-ItemProperty -Path $key -Name DefaultConnectionSettings -ErrorAction SilentlyContinue).DefaultConnectionSettings
+          if (-not $v) { $v = [byte[]](@(0x46,0,0,0, 0,0,0,0, 1,0,0,0) + @(0) * 44) }
+          $v[4] = [byte](($v[4] + 1) % 256)
+          $v[8] = [byte]($v[8] -bor 0x09)
+          Set-ItemProperty -Path $key -Name DefaultConnectionSettings -Value $v -Type Binary
+          Start-Service WinHttpAutoProxySvc -ErrorAction SilentlyContinue
+          "before hosts: " + [System.Net.WebRequest]::GetSystemWebProxy().GetProxy('https://github.com').AbsoluteUri
+          $suffixes = @((Get-DnsClientGlobalSetting).SuffixSearchList) + @(Get-DnsClient | ForEach-Object { $_.ConnectionSpecificSuffix }) | Where-Object { $_ } | Sort-Object -Unique
+          $hosts = @('wpad') + ($suffixes | ForEach-Object { "wpad.$_" })
+          $hosts | ForEach-Object { Add-Content -Path "$env:SystemRoot\System32\drivers\etc\hosts" -Value "127.0.0.1 $_" }
+          "hosts: $hosts"
+          (Invoke-WebRequest -UseBasicParsing http://wpad/wpad.dat).Content
+          "GH_TEST_WPAD_PROXY=127.0.0.1:3999" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - shell: bash
         run: go test -v -count=1 ./internal/proxy/... 2>&1 | tee proxy.log
       - shell: bash
         run: |
+          grep -a 'AutoProxy service only' proxy.log || true
           ! grep -E -- '--- (SKIP|FAIL)' proxy.log
