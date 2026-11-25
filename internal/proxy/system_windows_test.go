@@ -4,9 +4,13 @@ package proxy
 
 import (
 	"net/url"
+	"os"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/windows"
 )
 
 func TestProxyListEntries(t *testing.T) {
@@ -54,4 +58,32 @@ func TestSystemProxies(t *testing.T) {
 			assert.NotEmpty(t, p.Host)
 		}
 	}
+}
+
+// TestSystemProxiesWPAD needs a machine with "Automatically detect
+// settings" on and a wpad.dat server for the "wpad" host. The fork CI sets
+// this up, and first asks the AutoProxy service while "wpad" does not
+// resolve, so that the service keeps a failed discovery.
+// GH_TEST_WPAD_PROXY is the proxy that the wpad.dat file returns.
+func TestSystemProxiesWPAD(t *testing.T) {
+	want := os.Getenv("GH_TEST_WPAD_PROXY")
+	if want == "" {
+		t.Skip("GH_TEST_WPAD_PROXY is not set")
+	}
+	u := &url.URL{Scheme: "https", Host: "api.github.com"}
+
+	agent, _ := windows.UTF16PtrFromString("GitHub CLI test")
+	session, _, _ := procWinHttpOpen.Call(uintptr(unsafe.Pointer(agent)), winhttpAccessTypeNoProxy, 0, 0, 0)
+	require.NotZero(t, session)
+	defer procWinHttpCloseHandle.Call(session)
+	target, _ := windows.UTF16PtrFromString(u.String())
+	info, err := proxyForURL(session, target, winhttpAutoproxyOptions{
+		flags:           winhttpAutoproxyAutoDetect,
+		autoDetectFlags: winhttpAutoDetectTypeDHCP | winhttpAutoDetectTypeDNSA,
+	})
+	t.Logf("AutoProxy service only: proxy=%q err=%v", takeString(info.proxy), err)
+
+	entries, err := systemProxies(u)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"PROXY " + want}, entries)
 }
