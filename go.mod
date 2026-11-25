@@ -11,6 +11,7 @@ require (
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.1.1
 	github.com/AlecAivazis/survey/v2 v2.3.7
+	github.com/Azure/go-ntlmssp v0.1.1
 	github.com/MakeNowJust/heredoc v1.0.0
 	github.com/Netflix/go-expect v0.0.0-20220104043353-73e0943537d2
 	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e
