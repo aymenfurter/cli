@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -119,10 +120,10 @@ func ctxErr(ctx context.Context, err error) error {
 func (t *tunnel) Dial(ctx context.Context, proxyURL *url.URL, addr string) (net.Conn, error) {
 	var (
 		conn    *proxyConn
+		cur     *scheme
 		hs      handshake
-		current string
 		auth    string
-		tried   = map[string]bool{}
+		tried   = map[*scheme]bool{}
 		reasons []string
 	)
 	closeConn := func() {
@@ -136,18 +137,28 @@ func (t *tunnel) Dial(ctx context.Context, proxyURL *url.URL, addr string) (net.
 			hs.finish(ctx, aborted)
 		}
 	}()
+	// begin starts a handshake with s and sets the first token.
+	begin := func(s *scheme) bool {
+		tried[s] = true
+		h, err := s.start(ctx, proxyURL)
+		if err != nil {
+			reasons = append(reasons, fmt.Sprintf("%s: %v", s.name, err))
+			return false
+		}
+		tok, err := h.step(nil)
+		if err != nil {
+			h.finish(ctx, aborted)
+			reasons = append(reasons, fmt.Sprintf("%s: %v", s.name, err))
+			return false
+		}
+		cur, hs, auth = s, h, authorization(s.name, tok)
+		return true
+	}
 
 	// A password in the proxy URL is sent at once, as net/http does.
 	if _, ok := proxyURL.User.Password(); ok {
-		for _, s := range t.schemes {
-			if s.name != "Basic" {
-				continue
-			}
-			if h, err := s.start(ctx, proxyURL); err == nil {
-				if tok, err := h.step(nil); err == nil {
-					hs, current, auth = h, "basic", authorization("Basic", tok)
-				}
-			}
+		if s := t.scheme("basic"); s != nil {
+			begin(s)
 		}
 	}
 
@@ -183,48 +194,23 @@ func (t *tunnel) Dial(ctx context.Context, proxyURL *url.URL, addr string) (net.
 		offered := challenges(res.Header)
 		auth = ""
 		if hs != nil {
-			// A token in the challenge continues the handshake. A challenge
-			// without a token rejects it.
-			if tok := offered[current]; tok != "" && conn != nil {
-				in, err := base64.StdEncoding.DecodeString(tok)
-				if err == nil {
-					var out []byte
-					if out, err = hs.step(in); err == nil {
-						auth = authorization(schemeName(current), out)
-						continue
-					}
-				}
-				reasons = append(reasons, fmt.Sprintf("%s: %v", schemeName(current), err))
+			// A token in the challenge continues the handshake on the same
+			// connection. A challenge without a token rejects it.
+			if next, err := continueHandshake(hs, offered[strings.ToLower(cur.name)], conn != nil); err != nil {
+				reasons = append(reasons, fmt.Sprintf("%s: %v", cur.name, err))
 			} else {
-				reasons = append(reasons, schemeName(current)+": the proxy rejected the credentials")
+				auth = authorization(cur.name, next)
+				continue
 			}
 			hs.finish(ctx, rejected)
 			hs = nil
-			tried[current] = true
 		}
 
-		for _, s := range t.schemes {
-			key := strings.ToLower(s.name)
-			if tried[key] {
-				continue
+		for i := range t.schemes {
+			s := &t.schemes[i]
+			if _, ok := offered[strings.ToLower(s.name)]; ok && !tried[s] && begin(s) {
+				break
 			}
-			if _, ok := offered[key]; !ok {
-				continue
-			}
-			tried[key] = true
-			h, err := s.start(ctx, proxyURL)
-			if err != nil {
-				reasons = append(reasons, fmt.Sprintf("%s: %v", s.name, err))
-				continue
-			}
-			tok, err := h.step(nil)
-			if err != nil {
-				h.finish(ctx, aborted)
-				reasons = append(reasons, fmt.Sprintf("%s: %v", s.name, err))
-				continue
-			}
-			hs, current, auth = h, key, authorization(s.name, tok)
-			break
 		}
 		if hs == nil {
 			closeConn()
@@ -238,14 +224,27 @@ func (t *tunnel) Dial(ctx context.Context, proxyURL *url.URL, addr string) (net.
 	return nil, &errProxyAuth{proxy: proxyURL.Host, reasons: append(reasons, "too many authentication steps")}
 }
 
-func schemeName(key string) string {
-	switch key {
-	case "negotiate":
-		return "Negotiate"
-	case "ntlm":
-		return "NTLM"
-	case "basic":
-		return "Basic"
+var errCredentialsRejected = errors.New("the proxy rejected the credentials")
+
+// continueHandshake returns the next token for a challenge token, or an
+// error when the proxy rejected the handshake.
+func continueHandshake(hs handshake, challenge string, connOpen bool) ([]byte, error) {
+	if challenge == "" || !connOpen {
+		return nil, errCredentialsRejected
 	}
-	return key
+	in, err := base64.StdEncoding.DecodeString(challenge)
+	if err != nil {
+		return nil, err
+	}
+	return hs.step(in)
+}
+
+// scheme returns the scheme with the lowercase name key, or nil.
+func (t *tunnel) scheme(key string) *scheme {
+	for i := range t.schemes {
+		if strings.ToLower(t.schemes[i].name) == key {
+			return &t.schemes[i]
+		}
+	}
+	return nil
 }

@@ -55,7 +55,11 @@ func (g *gitCredentials) fill(ctx context.Context, proxyURL *url.URL) (*credenti
 			return &credential{username: username, password: p}, nil
 		}
 	}
-	out, err := g.git(ctx, credentialInput(proxyURL, &credential{username: username}), "credential", "fill")
+	in, err := credentialInput(proxyURL, &credential{username: username})
+	if err != nil {
+		return nil, fmt.Errorf("%w for proxy %s: %v", errNoCredential, proxyURL.Host, err)
+	}
+	out, err := g.git(ctx, in, "credential", "fill")
 	if err != nil {
 		return nil, fmt.Errorf("%w for proxy %s: %v", errNoCredential, proxyURL.Host, err)
 	}
@@ -76,14 +80,14 @@ func (g *gitCredentials) fill(ctx context.Context, proxyURL *url.URL) (*credenti
 }
 
 func (g *gitCredentials) approve(ctx context.Context, proxyURL *url.URL, c *credential) {
-	if c.fromGit {
-		_, _ = g.git(ctx, credentialInput(proxyURL, c), "credential", "approve")
+	if in, err := credentialInput(proxyURL, c); err == nil && c.fromGit {
+		_, _ = g.git(ctx, in, "credential", "approve")
 	}
 }
 
 func (g *gitCredentials) reject(ctx context.Context, proxyURL *url.URL, c *credential) {
-	if c.fromGit {
-		_, _ = g.git(ctx, credentialInput(proxyURL, c), "credential", "reject")
+	if in, err := credentialInput(proxyURL, c); err == nil && c.fromGit {
+		_, _ = g.git(ctx, in, "credential", "reject")
 	}
 }
 
@@ -99,19 +103,27 @@ func (g *gitCredentials) git(ctx context.Context, stdin string, args ...string) 
 
 // credentialInput makes the "git credential" input for a proxy. Git asks
 // for proxy credentials with protocol "http" for both http and https
-// proxies, and with the host and port of the proxy.
-func credentialInput(proxyURL *url.URL, c *credential) string {
-	var b strings.Builder
-	b.WriteString("protocol=http\n")
-	fmt.Fprintf(&b, "host=%s\n", proxyHostPort(proxyURL))
-	if c.username != "" {
-		fmt.Fprintf(&b, "username=%s\n", c.username)
+// proxies, and with the host and port of the proxy. A value with a newline
+// or NUL could add attributes to the input, so it is an error.
+func credentialInput(proxyURL *url.URL, c *credential) (string, error) {
+	attrs := [][2]string{
+		{"protocol", "http"},
+		{"host", proxyHostPort(proxyURL)},
+		{"username", c.username},
+		{"password", c.password},
 	}
-	if c.password != "" {
-		fmt.Fprintf(&b, "password=%s\n", c.password)
+	var b strings.Builder
+	for _, a := range attrs {
+		if a[1] == "" {
+			continue
+		}
+		if strings.ContainsAny(a[1], "\n\x00") {
+			return "", fmt.Errorf("the proxy %s has a character that is not permitted", a[0])
+		}
+		fmt.Fprintf(&b, "%s=%s\n", a[0], a[1])
 	}
 	b.WriteString("\n")
-	return b.String()
+	return b.String(), nil
 }
 
 func proxyHostPort(proxyURL *url.URL) string {
