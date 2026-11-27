@@ -1,7 +1,7 @@
 // Package proxy finds the proxy for gh HTTP requests.
 //
-// When HTTPS_PROXY, HTTP_PROXY or ALL_PROXY is set, gh uses only the
-// environment, as before. When none is set, gh also reads the proxy settings
+// When HTTPS_PROXY or HTTP_PROXY is set, gh uses only the environment, as
+// before. Like Go, gh ignores ALL_PROXY. When none is set, gh also reads the proxy settings
 // of the operating system: the manual proxy, the proxy auto-configuration
 // (PAC) file and Web Proxy Auto-Discovery (WPAD) on macOS and Windows. NO_PROXY
 // applies to all proxies.
@@ -71,14 +71,6 @@ func (r *Resolver) init() {
 			HTTPProxy:  r.getenvAny("HTTP_PROXY", "http_proxy"),
 			HTTPSProxy: r.getenvAny("HTTPS_PROXY", "https_proxy"),
 			NoProxy:    r.getenvAny("NO_PROXY", "no_proxy"),
-		}
-		if all := r.getenvAny("ALL_PROXY", "all_proxy"); all != "" {
-			if env.HTTPProxy == "" {
-				env.HTTPProxy = all
-			}
-			if env.HTTPSProxy == "" {
-				env.HTTPSProxy = all
-			}
 		}
 		if env.HTTPProxy != "" || env.HTTPSProxy != "" {
 			r.envProxy = env.ProxyFunc()

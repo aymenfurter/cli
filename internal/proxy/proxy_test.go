@@ -52,11 +52,11 @@ func TestProxyForURL(t *testing.T) {
 			want:   "http://env:3128",
 		},
 		{
-			name:   "all_proxy wins over system",
+			name:   "all_proxy is ignored",
 			env:    map[string]string{"ALL_PROXY": "socks5://env:1080"},
 			system: []string{"PROXY sys:8080"},
 			target: "https://api.github.com/",
-			want:   "socks5://env:1080",
+			want:   "http://sys:8080",
 		},
 		{
 			name:   "system proxy",

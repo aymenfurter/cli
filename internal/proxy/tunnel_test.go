@@ -262,6 +262,47 @@ func TestTransportBasicFromCredentialStore(t *testing.T) {
 	assert.Equal(t, []string{"fill " + host, "approve monalisa", "fill " + host, "approve monalisa"}, creds.calls())
 }
 
+// closeCounter is a request body without GetBody, like a file or stdin.
+type closeCounter struct {
+	io.Reader
+	closes int
+}
+
+func (c *closeCounter) Close() error { c.closes++; return nil }
+
+func TestTransportRetriesBodyWithoutGetBody(t *testing.T) {
+	want := "Basic " + b64("monalisa:s3cret")
+	creds := &fakeCredentials{cred: &credential{username: "monalisa", password: "s3cret", fromGit: true}}
+	s := newSetup(t, func(origin string) string {
+		p := startFakeProxy(t, origin, nil, func(_ int, authz string) proxyReply {
+			return proxyReply{ok: authz == want, challenge: []string{`Basic realm="corp"`}}
+		})
+		return p.url()
+	}, creds, nil)
+
+	body := &closeCounter{Reader: strings.NewReader("from stdin")}
+	req, err := http.NewRequest("POST", "https://example.com/", body)
+	require.NoError(t, err)
+	require.Nil(t, req.GetBody)
+	res, err := s.client.Do(req)
+	require.NoError(t, err)
+	defer res.Body.Close()
+	got, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "ok from stdin", string(got))
+	assert.Equal(t, 1, body.closes)
+}
+
+func TestTransportClosesBodyAfterOtherError(t *testing.T) {
+	s := newSetup(t, func(string) string { return "http://127.0.0.1:1" }, &fakeCredentials{}, nil)
+	body := &closeCounter{Reader: strings.NewReader("x")}
+	req, err := http.NewRequest("POST", "https://example.com/", body)
+	require.NoError(t, err)
+	_, err = s.client.Do(req)
+	require.Error(t, err)
+	assert.Equal(t, 1, body.closes)
+}
+
 func TestTransportBasicRejected(t *testing.T) {
 	creds := &fakeCredentials{cred: &credential{username: "monalisa", password: "wrong", fromGit: true}}
 	s := newSetup(t, func(origin string) string {

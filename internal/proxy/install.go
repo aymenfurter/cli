@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -105,26 +106,64 @@ func (t *Transport) tunnelProxy(u *url.URL) *url.URL {
 
 // RoundTrip implements http.RoundTripper.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if p := t.tunnelProxy(req.URL); p != nil && t.needsAuth(p) {
+	p := t.tunnelProxy(req.URL)
+	if p == nil {
+		return t.direct.RoundTrip(req)
+	}
+	if t.needsAuth(p) {
 		return t.tunneled.RoundTrip(req)
 	}
-	res, err := t.direct.RoundTrip(req)
+	first := req
+	var body *heldBody
+	if req.Body != nil && req.Body != http.NoBody {
+		body = &heldBody{ReadCloser: req.Body}
+		first = req.Clone(req.Context())
+		first.Body = body
+	}
+	res, err := t.direct.RoundTrip(first)
 	var authErr *authRequiredError
-	if err == nil || !errors.As(err, &authErr) || t.tunnelProxy(req.URL) == nil {
+	retry := err != nil && errors.As(err, &authErr)
+	if body != nil {
+		body.finish(retry)
+	}
+	if !retry {
 		return res, err
 	}
-	retry := req.Clone(req.Context())
-	if req.Body != nil && req.Body != http.NoBody {
-		if req.GetBody == nil {
-			return nil, err
-		}
-		body, berr := req.GetBody()
-		if berr != nil {
-			return nil, err
-		}
-		retry.Body = body
+	// The proxy rejected the CONNECT request before the transport sent
+	// any of the body, so the original body is still unread.
+	return t.tunneled.RoundTrip(req)
+}
+
+// heldBody delays a Close from the transport until the first round trip
+// is complete. A failed CONNECT makes the transport close the request
+// body, but gh must send that body again through the auth tunnel.
+type heldBody struct {
+	io.ReadCloser
+
+	mu       sync.Mutex
+	finished bool
+	closed   bool
+}
+
+func (b *heldBody) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.finished {
+		b.closed = true
+		return nil
 	}
-	return t.tunneled.RoundTrip(retry)
+	return b.ReadCloser.Close()
+}
+
+// finish ends the hold. If keep is false, it does a Close that it delayed.
+func (b *heldBody) finish(keep bool) {
+	b.mu.Lock()
+	b.finished = true
+	closed := b.closed
+	b.mu.Unlock()
+	if closed && !keep {
+		_ = b.ReadCloser.Close()
+	}
 }
 
 // CloseIdleConnections closes the idle connections of both transports.
