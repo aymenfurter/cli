@@ -13,12 +13,36 @@ import (
 )
 
 func TestCredentialInput(t *testing.T) {
-	assert.Equal(t, "protocol=http\nhost=proxy:8080\n\n",
-		credentialInput(mustURL(t, "http://proxy:8080"), &credential{}))
-	assert.Equal(t, "protocol=http\nhost=proxy:443\nusername=u\npassword=p\n\n",
-		credentialInput(mustURL(t, "https://proxy"), &credential{username: "u", password: "p"}))
-	assert.Equal(t, "protocol=http\nhost=proxy:80\n\n",
-		credentialInput(mustURL(t, "http://proxy"), &credential{}))
+	tests := []struct {
+		proxy   string
+		cred    credential
+		want    string
+		wantErr bool
+	}{
+		{proxy: "http://proxy:8080", want: "protocol=http\nhost=proxy:8080\n\n"},
+		{proxy: "https://proxy", cred: credential{username: "u", password: "p"}, want: "protocol=http\nhost=proxy:443\nusername=u\npassword=p\n\n"},
+		{proxy: "http://proxy", want: "protocol=http\nhost=proxy:80\n\n"},
+		{proxy: "http://proxy", cred: credential{username: "u\nhost=evil"}, wantErr: true},
+		{proxy: "http://proxy", cred: credential{password: "p\x00"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		got, err := credentialInput(mustURL(t, tt.proxy), &tt.cred)
+		if tt.wantErr {
+			assert.Error(t, err)
+			continue
+		}
+		require.NoError(t, err)
+		assert.Equal(t, tt.want, got)
+	}
+}
+
+func TestGitCredentialsNewlineInUserInfo(t *testing.T) {
+	g := &gitCredentials{run: func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("git must not run")
+		return nil, nil
+	}}
+	_, err := g.fill(context.Background(), mustURL(t, "http://u%0Ahost=evil@proxy:3128"))
+	assert.ErrorIs(t, err, errNoCredential)
 }
 
 func TestGitCredentialsURLUserInfo(t *testing.T) {

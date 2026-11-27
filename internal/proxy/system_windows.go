@@ -30,7 +30,7 @@ const (
 	winhttpAutoproxyConfigURL   = 0x2
 	winhttpAutoDetectTypeDHCP   = 0x1
 	winhttpAutoDetectTypeDNSA   = 0x2
-	// winhttpAutoproxyRunInprocess runs WPAD and the PAC script in this
+	// winhttpAutoproxyRunInprocess runs the PAC download and script in this
 	// process instead of in the WinHTTP AutoProxy service.
 	winhttpAutoproxyRunInprocess = 0x00010000
 
@@ -137,19 +137,13 @@ func autoProxy(u *url.URL, autoDetect bool, pacURL string) ([]string, bool) {
 		// WinHTTP DNS discovery uses only the primary DNS suffix of the
 		// computer, so it does not work on most computers that are not in a
 		// domain. Browsers also try the unqualified "wpad" host, which the
-		// DNS suffix search list completes.
+		// DNS suffix search list completes. This runs in the process because
+		// the AutoProxy service can keep an earlier failure.
 		p, _ := windows.UTF16PtrFromString(wpadURL)
 		opts = append(opts, winhttpAutoproxyOptions{flags: winhttpAutoproxyConfigURL | winhttpAutoproxyRunInprocess, autoConfigURL: p})
 	}
 	for _, o := range opts {
 		info, err := proxyForURL(session, target, o)
-		if err != nil && o.flags&winhttpAutoproxyAutoDetect != 0 {
-			// The AutoProxy service keeps a failed discovery for some time,
-			// also after the network changes (for example a new "wpad" DNS
-			// entry). A discovery in this process does not use that cache.
-			o.flags |= winhttpAutoproxyRunInprocess
-			info, err = proxyForURL(session, target, o)
-		}
 		if err != nil {
 			continue
 		}

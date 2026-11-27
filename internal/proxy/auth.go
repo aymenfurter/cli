@@ -117,7 +117,6 @@ type credentialHandshake struct {
 	proxyURL *url.URL
 	cred     *credential
 	mech     credentialMechanism
-	sent     bool
 }
 
 func newCredentialHandshake(ctx context.Context, creds credentialStore, proxyURL *url.URL, mech credentialMechanism) (handshake, error) {
@@ -129,14 +128,10 @@ func newCredentialHandshake(ctx context.Context, creds credentialStore, proxyURL
 }
 
 func (h *credentialHandshake) step(challenge []byte) ([]byte, error) {
-	h.sent = true
 	return h.mech.step(h.cred, challenge)
 }
 
 func (h *credentialHandshake) finish(ctx context.Context, result authResult) {
-	if !h.sent {
-		return
-	}
 	switch result {
 	case accepted:
 		h.creds.approve(ctx, h.proxyURL, h.cred)
